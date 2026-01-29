@@ -12,7 +12,7 @@ bash, fzf, ps, awk, kill
 
 ## Install
 ```bash
-pull this epic repo
+# pull this epic repo first
 chmod +x pzz
 sudo mv pzz /usr/local/bin/
 ```
