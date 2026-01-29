@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+query="${*:-}"
+self="$(basename "$0")"
+
+tmp="$(mktemp)"
+trap 'rm -f "$tmp"' EXIT
+
+cat > "$tmp" <<'BASH'
+#!/usr/bin/env bash
+set -euo pipefail
+
+q="${1:-}"
+main_self="${2:-}"
+
+ps aux | awk '
+  NR==1{next}
+  {
+    cmd=$11; for(i=12;i<=NF;i++) cmd=cmd" "$i;
+    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", $1,$2,$3,$4,$9,$7,cmd
+  }' \
+| awk -F'\t' -v self="$main_self" '
+    BEGIN{IGNORECASE=1}
+
+    # drop helper processes
+    $7 ~ /(awk|grep|fzf)/ {next}
+
+    # drop the temp helper script itself (mktemp path)
+    $7 ~ /\/tmp\/tmp\./ {next}
+
+    # drop the main launcher script itself (pzz) no matter how it is invoked
+    $7 ~ ("(^|[[:space:]])([^[:space:]]*/)?(" self ")([[:space:]]|$)") {next}
+    $7 ~ ("(^|[[:space:]])(bash|sh)[[:space:]]+([^[:space:]]*/)?(" self ")([[:space:]]|$)") {next}
+
+    {print}
+  ' \
+| awk -F'\t' -v q="$q" 'BEGIN{IGNORECASE=1}
+    q=="" {print; next}
+    index($7,q) {print}
+  ' \
+| awk -F'\t' '{printf "%-10s %-7s %5s %5s %-8s %-8s %.180s\n",$1,$2,$3,$4,$5,$6,$7}'
+BASH
+chmod +x "$tmp"
+
+selection="$(
+  fzf --ansi --multi --cycle \
+      --phony --query "$query" \
+      --height=100% --layout=reverse --no-border \
+      --prompt="kill> " \
+      --pointer="❯" --marker="●" \
+      --info=inline-right \
+      --header=$'ENTER=TERM   CTRL-K=KILL9   TAB=multi   CTRL-R=refresh   ESC=quit\nUSER        PID      CPU   MEM  START    TTY      CMD\n' \
+      --bind "start:reload(bash -lc '$tmp \"{q}\" \"$self\"')" \
+      --bind "change:reload(bash -lc '$tmp \"{q}\" \"$self\"')" \
+      --bind "ctrl-r:reload(bash -lc '$tmp \"{q}\" \"$self\"')" \
+      --bind "ctrl-k:execute-silent(echo {} | awk '{print \$2}' | xargs -r kill -9)+reload(bash -lc '$tmp \"{q}\" \"$self\"')"
+)"
+
+[[ -n "${selection:-}" ]] || exit 0
+
+pids="$(awk '{print $2}' <<<"$selection" | tr '\n' ' ')"
+[[ -n "${pids// }" ]] || exit 0
+
+kill -15 $pids 2>/dev/null || true
+sleep 0.3
+
+for p in $pids; do
+  kill -0 "$p" 2>/dev/null && kill -9 "$p" 2>/dev/null || true
+done
+
